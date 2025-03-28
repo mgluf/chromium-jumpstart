@@ -1,6 +1,10 @@
 import os
 import json
 import subprocess
+import time
+import sys
+from jumpstart.config import load_config
+
 
 CHROMIUM_SRC_DIR = os.path.expanduser("~/chromium_src")
 DEPOT_TOOLS_DIR = os.path.expanduser("~/depot_tools")
@@ -35,10 +39,10 @@ DEFAULT_CONFIG = {
     }
 }
 
-def run_command(command, cwd=None):
+def run_command(command, cwd=None, check=True):
     """Run a shell command and return output."""
     result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True)
-    if result.returncode != 0:
+    if result.returncode != 0 and check:
         print(f"❌ Command failed: {command}")
         print(result.stderr)
         exit(1)
@@ -49,23 +53,114 @@ def check_chromium_source():
     return os.path.exists(CHROMIUM_SRC_DIR)
 
 def setup_depot_tools():
-    """Ensure depot_tools is installed and configured."""
-    if not os.path.exists(DEPOT_TOOLS_DIR):
-        print("🚀 Installing depot_tools...")
+    """Ensure depot_tools is installed, added to PATH, and verified."""
+    if os.path.exists(DEPOT_TOOLS_DIR):
+        print("✅ Depot Tools already installed.")
+    else:
+        print("🚀 Installing Depot Tools...")
         run_command(f"git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git {DEPOT_TOOLS_DIR}")
 
     # Add depot_tools to PATH
-    os.environ["PATH"] = f"{DEPOT_TOOLS_DIR}:{os.environ['PATH']}"
+    depot_path = f"{DEPOT_TOOLS_DIR}"
+    current_path = os.environ.get("PATH", "")
+
+    if depot_path not in current_path:
+        os.environ["PATH"] = f"{depot_path}:{current_path}"
+        print("✅ Depot Tools added to PATH.")
+
+    # Debugging: Check if fetch is accessible
+    try:
+        fetch_path = run_command("which fetch", check=True)
+        print(f"✅ Depot Tools setup complete. Fetch located at: {fetch_path}")
+    except:
+        print("❌ Depot Tools installed but not found in PATH!")
+        print("➡️ Current PATH:", os.environ.get("PATH", ""))
+        print("⚠️ Restart your terminal or manually run:")
+        print(f"   export PATH={DEPOT_TOOLS_DIR}:$PATH")
+        exit(1)
+
+FETCH_TIMEOUT = 600  # 10 minutes of no progress = potential stall
+LOG_UPDATE_INTERVAL = 1  # Check log every 1 seconds
 
 def fetch_chromium_source():
-    """Fetch Chromium source if it doesn't exist."""
-    if check_chromium_source():
-        print(f"✅ Chromium source found at {CHROMIUM_SRC_DIR}. Skipping download.")
-    else:
-        print("🚀 Fetching Chromium source (this may take a while)...")
+    """Ensure Chromium source directory exists, detect corrupt fetches, and show real-time progress on a single line."""
+
+    # Ensure chromium_src directory exists
+    if not os.path.exists(CHROMIUM_SRC_DIR):
+        print(f"📂 Creating Chromium source directory at {CHROMIUM_SRC_DIR}...")
         os.makedirs(CHROMIUM_SRC_DIR, exist_ok=True)
-        run_command("fetch --nohooks chromium", cwd=CHROMIUM_SRC_DIR)
-        run_command("gclient sync", cwd=CHROMIUM_SRC_DIR)
+
+    src_path = os.path.join(CHROMIUM_SRC_DIR, "src")
+    bad_scm_path = os.path.join(CHROMIUM_SRC_DIR, "_bad_scm")
+
+    # Check for previous failed fetch and clean up
+    if os.path.exists(bad_scm_path):
+        print("⚠️ Chromium fetch was previously corrupted (detected _bad_scm/).")
+        print("🛠 Cleaning up before reattempting fetch...")
+        run_command(f"rm -rf {CHROMIUM_SRC_DIR}")
+        os.makedirs(CHROMIUM_SRC_DIR, exist_ok=True)
+
+    # If Chromium is already downloaded correctly, skip fetch
+    if os.path.exists(src_path):
+        print(f"✅ Chromium source found at {CHROMIUM_SRC_DIR}. Skipping download.")
+        return
+
+    print("⏳ Preventing system sleep during fetch...")
+    print("--")
+    print("🚀 Fetching Chromium source (this may take a while)...")
+    print("--")
+
+    fetch_log = f"{CHROMIUM_SRC_DIR}/fetch_error.log"
+    fetch_cmd = f"caffeinate -dims fetch --nohooks chromium 2>&1 | tee {fetch_log}"
+
+    try:
+        # Start fetch in a background process
+        fetch_process = subprocess.Popen(fetch_cmd, shell=True, cwd=CHROMIUM_SRC_DIR, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # Monitor fetch progress
+        last_log_size = 0
+        start_time = time.time()
+
+        while fetch_process.poll() is None:  # While fetch is running
+            time.sleep(LOG_UPDATE_INTERVAL)  # Check log every 60 seconds
+
+            if os.path.exists(fetch_log):
+                log_size = os.path.getsize(fetch_log)
+                if log_size > last_log_size:
+                    last_log_size = log_size  # Fetch is still progressing
+                    start_time = time.time()  # Reset timeout counter
+
+                    # Get last log line
+                    with open(fetch_log, "r") as f:
+                        lines = f.readlines()
+                        last_line = lines[-1].strip() if lines else "..."
+
+                    # Print last log line on the same line (overwrite previous output)
+                    sys.stdout.write(f"\r{last_line}    ")  # Extra spaces clear leftovers
+                    sys.stdout.flush()
+
+                elif time.time() - start_time > FETCH_TIMEOUT:
+                    print("\n⚠️ Chromium fetch appears to be stalled. No new log updates for 10 minutes.")
+                    print("🔄 You may choose to wait or manually stop the fetch and retry.")
+                    break  # Exit loop but leave fetch running in case it recovers
+
+        fetch_process.wait()  # Ensure process finishes
+
+        # Verify fetch succeeded
+        if not os.path.exists(src_path):
+            print("\n❌ Chromium fetch completed, but 'src/' is missing.")
+            print("⚠️ The fetch may have been interrupted (e.g., system sleep).")
+            print(f"📝 Check the logs at: {fetch_log}")
+            print("🔄 Please rerun `jumpstart init` to retry the fetch.")
+            exit(1)
+
+        print("\n✅ Chromium source successfully downloaded.")
+
+    except:
+        print(f"\n❌ Error: Chromium fetch failed. Check logs at {fetch_log}")
+        print("🔄 Please rerun `jumpstart init` to retry the fetch.")
+        exit(1)
+
 
 def install_mac_dependencies():
     """Ensure Mac build dependencies are installed."""
@@ -158,13 +253,8 @@ def main():
         setup_build_directory(project_path)
 
         # Load config and apply build flags
-        config_path = os.path.join(project_path, "jumpstart.config.json")
-        if os.path.exists(config_path):
-            with open(config_path, "r") as f:
-                config = json.load(f)
-            apply_build_flags(config)
-        else:
-            print("⚠️ No config file found. Using defaults.")
+        config = load_config(project_path)  # Use centralized function
+        apply_build_flags(config)
 
         print(f"\n🎉 Project '{project_name}' is ready!")
         print(f"📂 Navigate to the project: `cd {project_name}`")
