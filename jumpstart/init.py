@@ -82,8 +82,18 @@ def setup_depot_tools():
 FETCH_TIMEOUT = 600  # 10 minutes of no progress = potential stall
 LOG_UPDATE_INTERVAL = 1  # Check log every 1 seconds
 
+def setup_git_config():
+    """Ensure Git is optimized for large Chromium fetches."""
+    print("⚙️ Configuring Git for large repository handling...")
+    run_command("git config --global http.postBuffer 1048576000")
+    run_command("git config --global http.lowSpeedLimit 0")
+    run_command("git config --global http.lowSpeedTime 999999")
+    print("✅ Git configuration applied.")
+
 def fetch_chromium_source():
-    """Ensure Chromium source directory exists, detect corrupt fetches, and show real-time progress on a single line."""
+    """Ensure Chromium source directory exists, detect corrupt fetches, and show real-time progress."""
+
+    setup_git_config()  # Apply Git optimizations before fetch
 
     # Ensure chromium_src directory exists
     if not os.path.exists(CHROMIUM_SRC_DIR):
@@ -106,12 +116,13 @@ def fetch_chromium_source():
         return
 
     print("⏳ Preventing system sleep during fetch...")
-    print("--")
+    print("---")
     print("🚀 Fetching Chromium source (this may take a while)...")
-    print("--")
+    print("---")
 
     fetch_log = f"{CHROMIUM_SRC_DIR}/fetch_error.log"
     fetch_cmd = f"caffeinate -dims fetch --nohooks chromium 2>&1 | tee {fetch_log}"
+    sync_cmd = f"gclient sync --jobs 16 --nohooks 2>&1 | tee -a {fetch_log}"
 
     try:
         # Start fetch in a background process
@@ -122,7 +133,7 @@ def fetch_chromium_source():
         start_time = time.time()
 
         while fetch_process.poll() is None:  # While fetch is running
-            time.sleep(LOG_UPDATE_INTERVAL)  # Check log every 60 seconds
+            time.sleep(LOG_UPDATE_INTERVAL)  # Check log every second
 
             if os.path.exists(fetch_log):
                 log_size = os.path.getsize(fetch_log)
@@ -135,8 +146,8 @@ def fetch_chromium_source():
                         lines = f.readlines()
                         last_line = lines[-1].strip() if lines else "..."
 
-                    # Print last log line on the same line (overwrite previous output)
-                    sys.stdout.write(f"\r{last_line}    ")  # Extra spaces clear leftovers
+                    # Overwrite previous log line in terminal
+                    sys.stdout.write(f"\r{last_line}    ")
                     sys.stdout.flush()
 
                 elif time.time() - start_time > FETCH_TIMEOUT:
@@ -145,6 +156,13 @@ def fetch_chromium_source():
                     break  # Exit loop but leave fetch running in case it recovers
 
         fetch_process.wait()  # Ensure process finishes
+
+        if fetch_process.returncode == 0:
+            print("\n✅ Chromium fetch completed. Running parallel sync...")
+            run_command(sync_cmd, cwd=CHROMIUM_SRC_DIR)
+        else:
+            print(f"\n❌ Chromium fetch encountered an error. Check logs at {fetch_log}")
+            exit(1)
 
         # Verify fetch succeeded
         if not os.path.exists(src_path):
