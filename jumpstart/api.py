@@ -1,0 +1,1 @@
+# Handles Browser ↔ Frontend API logic

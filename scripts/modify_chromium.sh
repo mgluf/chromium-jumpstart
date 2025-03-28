@@ -1,0 +1,1 @@
+# script for stripping features based on jumpstart.config.json
