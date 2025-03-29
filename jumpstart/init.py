@@ -90,9 +90,17 @@ def setup_git_config():
     run_command("git config --global http.lowSpeedTime 999999")
     print("✅ Git configuration applied.")
 
-def fetch_chromium_source():
-    """Ensure Chromium source directory exists, detect corrupt fetches, and show real-time progress."""
+def get_dir_size(path):
+    """Return a human-readable directory size (e.g. '5.2G') using du."""
+    try:
+        size_str = subprocess.check_output(f"du -sh {path}", shell=True, text=True).split()[0]
+        return size_str
+    except Exception as e:
+        return "unknown"
 
+def fetch_chromium_source():
+    """Ensure Chromium source directory exists, detect corrupt fetches, and show real-time progress with verbose Git logging and directory size readout."""
+    
     setup_git_config()  # Apply Git optimizations before fetch
 
     # Ensure chromium_src directory exists
@@ -120,40 +128,42 @@ def fetch_chromium_source():
     print("🚀 Fetching Chromium source (this may take a while)...")
     print("---")
 
+    # Set up verbose Git logging by prefixing the fetch command with environment variables
     fetch_log = f"{CHROMIUM_SRC_DIR}/fetch_error.log"
-    fetch_cmd = f"caffeinate -dims fetch --nohooks chromium 2>&1 | tee {fetch_log}"
+    fetch_cmd = f"GIT_TRACE=1 GIT_CURL_VERBOSE=1 caffeinate -dims fetch --nohooks chromium 2>&1 | tee {fetch_log}"
     sync_cmd = f"gclient sync --jobs 16 --nohooks 2>&1 | tee -a {fetch_log}"
 
     try:
         # Start fetch in a background process
         fetch_process = subprocess.Popen(fetch_cmd, shell=True, cwd=CHROMIUM_SRC_DIR, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        # Monitor fetch progress
         last_log_size = 0
         start_time = time.time()
 
-        while fetch_process.poll() is None:  # While fetch is running
-            time.sleep(LOG_UPDATE_INTERVAL)  # Check log every second
-
+        while fetch_process.poll() is None:
+            time.sleep(LOG_UPDATE_INTERVAL)
             if os.path.exists(fetch_log):
                 log_size = os.path.getsize(fetch_log)
                 if log_size > last_log_size:
-                    last_log_size = log_size  # Fetch is still progressing
+                    last_log_size = log_size
                     start_time = time.time()  # Reset timeout counter
 
                     # Get last log line
                     with open(fetch_log, "r") as f:
                         lines = f.readlines()
                         last_line = lines[-1].strip() if lines else "..."
-
-                    # Overwrite previous log line in terminal
-                    sys.stdout.write(f"\r{last_line}    ")
+                    
+                    # Get directory size
+                    dir_size = get_dir_size(CHROMIUM_SRC_DIR)
+                    
+                    # Overwrite previous output with log line and directory size info
+                    output_line = f"{last_line} | Dir size: {dir_size}"
+                    sys.stdout.write("\r" + output_line.ljust(120))
                     sys.stdout.flush()
-
                 elif time.time() - start_time > FETCH_TIMEOUT:
                     print("\n⚠️ Chromium fetch appears to be stalled. No new log updates for 10 minutes.")
                     print("🔄 You may choose to wait or manually stop the fetch and retry.")
-                    break  # Exit loop but leave fetch running in case it recovers
+                    break
 
         fetch_process.wait()  # Ensure process finishes
 
@@ -174,11 +184,11 @@ def fetch_chromium_source():
 
         print("\n✅ Chromium source successfully downloaded.")
 
-    except:
-        print(f"\n❌ Error: Chromium fetch failed. Check logs at {fetch_log}")
+    except Exception as e:
+        print(f"\n❌ Error: Chromium fetch failed. {str(e)}")
+        print(f"🔍 Check logs at {fetch_log}")
         print("🔄 Please rerun `jumpstart init` to retry the fetch.")
         exit(1)
-
 
 def install_mac_dependencies():
     """Ensure Mac build dependencies are installed."""
