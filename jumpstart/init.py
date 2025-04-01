@@ -6,43 +6,10 @@ import sys
 import pty
 import shlex
 import argparse
-from jumpstart.config import load_config
+from jumpstart.config import load_config, generate_config, validate_config, write_config
 
 CHROMIUM_GIT_REPO = "https://chromium.googlesource.com/chromium/src.git"
 STALL_TIMEOUT = 120  # 2 minutes
-
-DEFAULT_CONFIG = {
-    "metadata": {
-        "name": "",
-        "version": "0.1",
-        "description": "Custom Chromium build configuration",
-        "base_chromium_version": "latest"
-    },
-    "paths": {
-        "chromium_src": ""
-    },
-    "features": {
-        "security": {
-            "sandboxing": True,
-            "site_isolation": True
-        },
-        "performance": {
-            "gpu_acceleration": True
-        },
-        "privacy": {
-            "tracking_protection": True,
-            "ad_blocking": True
-        }
-    },
-    "build": {
-        "optimization_level": "O2",
-        "disable_google_update_check": True,
-        "is_debug": False,
-        "use_jumbo_build": True,
-        "thin_lto": True,
-        "custom_build_flags": None
-    }
-}
 
 # ----------------- Logging Functions -----------------
 def log_info(message):
@@ -87,17 +54,18 @@ def prompt_project_name():
 
 # ----------------- Git Clone and Sync -----------------
 def perform_git_clone(chromium_src_dir):
-    log_info("Cloning Chromium source...")
+    log_info("Cloning Chromium source via git clone...")
     cmd = shlex.split(f"git clone --progress {CHROMIUM_GIT_REPO} {chromium_src_dir}")
 
     def read(fd):
         last_output_time = time.time()
         try:
             while True:
-                output = os.read(fd, 1024).decode(errors="ignore")
-                if not output:
+                data = os.read(fd, 1024)
+                if not data:
                     break
-                # Show first 100 characters of current output line
+                output = data.decode(errors="ignore")
+                # Show first 100 characters of the output line
                 sys.stdout.write("\r" + output.strip().replace('\n', ' ')[:100])
                 sys.stdout.flush()
                 last_output_time = time.time()
@@ -109,10 +77,9 @@ def perform_git_clone(chromium_src_dir):
                 if time.time() - last_output_time > STALL_TIMEOUT:
                     log_warn("Git clone appears stalled for over 2 minutes.")
                     raise TimeoutError("stall detected")
-
         except Exception:
-            return False
-        return True
+            return b""
+        return b""
 
     try:
         return pty.spawn(cmd, read)
@@ -120,25 +87,39 @@ def perform_git_clone(chromium_src_dir):
         log_error(f"Git clone failed: {str(e)}")
         return False
 
-def fetch_chromium_source(chromium_src_dir):
-    if os.path.exists(chromium_src_dir):
-        log_info("Chromium source already exists, skipping clone.")
-        return
-    # Start cloning
-    success = perform_git_clone(chromium_src_dir)
-    if not success:
-        log_error("Fatal error during clone. Deleting partial clone and exiting.")
-        run_command(f"rm -rf {chromium_src_dir}")
-        exit(1)
+def perform_depot_fetch(chromium_src_dir):
+    log_info("Fetching Chromium source using depot_fetch method...")
+    # TODO: Implement the depot_fetch method.
+    log_warn("depot_fetch method not yet implemented.")
+    return False
 
-    # Check for Chromium corruption marker in the clone
+def fetch_chromium_source(chromium_src_dir, depot_fetch=False):
+    if os.path.exists(chromium_src_dir):
+        log_info("Chromium source already exists, skipping fetch.")
+        return
+    # Use the selected fetch method.
+    if depot_fetch:
+        success = perform_depot_fetch(chromium_src_dir)
+    else:
+        success = perform_git_clone(chromium_src_dir)
+    if not success:
+        log_error("Fatal error during fetch.")
+        response = prompt_input(f"Delete {chromium_src_dir} and re-init? (Y/n)")
+        if response.lower() in ["", "y", "yes"]:
+            run_command(f"rm -rf {chromium_src_dir}")
+            fetch_chromium_source(chromium_src_dir, depot_fetch)
+        else:
+            log_info("User opted to inspect the partial clone. Aborting fetch.")
+            exit(1)
+
+    # Check for Chromium corruption marker in the clone.
     bad_scm_path = os.path.join(chromium_src_dir, "_bad_scm")
     if os.path.exists(bad_scm_path):
         log_error("Detected Chromium corruption (_bad_scm exists).")
-        confirm = input("Are you sure you want to delete and retry? (y/n): ").strip().lower()
+        confirm = prompt_input("Are you sure you want to delete and retry? (y/n):").lower()
         if confirm == 'y':
             run_command(f"rm -rf {chromium_src_dir}")
-            fetch_chromium_source(chromium_src_dir)
+            fetch_chromium_source(chromium_src_dir, depot_fetch)
         else:
             log_error("Aborting.")
             exit(1)
@@ -148,7 +129,7 @@ def fetch_chromium_source(chromium_src_dir):
 
 # ----------------- OS Dependencies -----------------
 def install_os_dependencies(chromium_src_dir):
-    # Currently supports only macOS
+    # Currently supports only macOS.
     log_info("Installing OS-specific dependencies for macOS...")
     run_command("brew install ninja ccache", cwd=chromium_src_dir)
     run_command("./build/install-build-deps.sh --mac", cwd=chromium_src_dir)
@@ -156,30 +137,22 @@ def install_os_dependencies(chromium_src_dir):
 # ----------------- Build Configuration -----------------
 def apply_build_flags(config, chromium_src_dir):
     build_flags = []
-
     if config["build"]["optimization_level"]:
         build_flags.append(f"is_optimized={config['build']['optimization_level'] != 'O0'}")
-
     if config["build"]["is_debug"]:
         build_flags.append("is_debug=true")
     else:
         build_flags.append("is_debug=false")
-
     if config["build"]["use_jumbo_build"]:
         build_flags.append("use_jumbo_build=true")
-
     if config["build"]["thin_lto"]:
         build_flags.append("thin_lto=true")
-
     if config["build"]["disable_google_update_check"]:
         build_flags.append("disable_google_update_check=true")
-
     if config["build"]["custom_build_flags"]:
         build_flags.append(config["build"]["custom_build_flags"])
-
     build_args = " ".join(build_flags)
     log_info(f"Applying build flags: {build_args}")
-
     run_command(f'gn gen out/Default --args="{build_args}"', cwd=chromium_src_dir)
 
 # ----------------- Project Setup -----------------
@@ -193,71 +166,16 @@ def create_project_directory(project_name, base_path):
     os.makedirs(os.path.join(project_path, "src"))
     return project_path
 
-def write_config_file(project_path, project_name, chromium_src_dir):
-    config = DEFAULT_CONFIG.copy()
+def write_config_file(project_path, project_name, chromium_src_dir, config):
     config["metadata"]["name"] = project_name
     config["paths"]["chromium_src"] = chromium_src_dir
-
-    config_path = os.path.join(project_path, "jumpstart.config.json")
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=4)
-    log_success(f"Created configuration file: {config_path}")
+    write_config(project_path, config)
+    log_success(f"Created configuration file: {os.path.join(project_path, 'jumpstart.config.json')}")
 
 def setup_build_directory(project_path, chromium_src_dir):
     build_dir = os.path.join(chromium_src_dir, "out", os.path.basename(project_path))
     os.makedirs(build_dir, exist_ok=True)
     log_success(f"Created build directory: {build_dir}")
-
-# ----------------- Main Flow -----------------
-def main():
-    parser = argparse.ArgumentParser(description="Jumpstart: Initialize Chromium project environment")
-    parser.add_argument("command", help="Command to execute", choices=["init"])
-    args = parser.parse_args()
-
-    if args.command != "init":
-        parser.print_help()
-        exit(1)
-
-    log_info("Setting up Chromium Jumpstart environment...")
-
-    # Prompt for the Chromium source install path.
-    chromium_src_dir = prompt_chromium_src_path()
-
-    # Define marker file to indicate that cloning, sync, and OS dependency installation have been completed.
-    marker_file = os.path.join(chromium_src_dir, ".jumpstart_installed")
-    if not os.path.exists(chromium_src_dir) or not os.path.exists(marker_file):
-        setup_depot_tools(chromium_src_dir)
-        run_git_config()
-        fetch_chromium_source(chromium_src_dir)
-        install_os_dependencies(chromium_src_dir)
-        # Create marker file.
-        with open(marker_file, "w") as f:
-            f.write("installed")
-    else:
-        log_info("Chromium environment already set up. Skipping clone, sync, and OS dependencies installation.")
-
-    # Prompt for the jumpstart project initialization directory.
-    jumpstart_repo_base = prompt_jumpstart_repo_path()
-
-    project_name = prompt_project_name()
-    if not project_name:
-        log_error("Project name cannot be empty.")
-        return
-
-    log_info(f"Initializing Chromium Jumpstart project: {project_name}...")
-
-    project_path = create_project_directory(project_name, jumpstart_repo_base)
-    if project_path:
-        write_config_file(project_path, project_name, chromium_src_dir)
-        setup_build_directory(project_path, chromium_src_dir)
-
-        config = load_config(project_path)
-        apply_build_flags(config, chromium_src_dir)
-
-        log_success(f"Project '{project_name}' is ready!")
-        log_info(f"Navigate to the project: cd {project_path}")
-        log_info(f"Modify your config: {os.path.join(project_path, 'jumpstart.config.json')}")
-        log_info(f"Start building: cd {chromium_src_dir} && ninja -C out/{project_name}")
 
 # ----------------- Depot Tools and Git Config -----------------
 def setup_depot_tools(chromium_src_dir):
@@ -267,7 +185,7 @@ def setup_depot_tools(chromium_src_dir):
     else:
         log_info("Installing Depot Tools...")
         run_command(f"caffeinate git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git {depot_tools_dir}")
-    # Ensure depot_tools is in PATH
+    # Ensure depot_tools is in PATH.
     current_path = os.environ.get("PATH", "")
     if depot_tools_dir not in current_path:
         os.environ["PATH"] = f"{depot_tools_dir}:{current_path}"
@@ -287,6 +205,74 @@ def run_git_config():
     run_command("git config --global http.lowSpeedLimit 0")
     run_command("git config --global http.lowSpeedTime 999999")
     log_success("Git configuration applied.")
+
+# ----------------- Main Flow -----------------
+def main():
+    parser = argparse.ArgumentParser(description="Jumpstart: Initialize Chromium project environment")
+    parser.add_argument("command", help="Command to execute", choices=["init"])
+    parser.add_argument("-n", "--name", type=str, help="Project name")
+    parser.add_argument("-p", "--path", type=str, help="Directory for jumpstart project initialization")
+    parser.add_argument("-src", "--source", type=str, help="Chromium source directory")
+    parser.add_argument("-df", "--depot_fetch", action="store_true", help="Use depot_fetch method for fetching Chromium source")
+    parser.add_argument("-c", "--config", type=str, help="Path to a configuration file")
+    args = parser.parse_args()
+
+    if args.command != "init":
+        parser.print_help()
+        exit(1)
+
+    log_info("Setting up Chromium Jumpstart environment...")
+
+    # Use provided arguments or prompt for values.
+    if args.source:
+        chromium_src_dir = os.path.expanduser(args.source)
+    else:
+        chromium_src_dir = prompt_chromium_src_path()
+
+    if args.path:
+        jumpstart_repo_base = os.path.expanduser(args.path)
+    else:
+        jumpstart_repo_base = prompt_jumpstart_repo_path()
+
+    if args.name:
+        project_name = args.name
+    else:
+        project_name = prompt_project_name()
+
+    # Process configuration file if provided.
+    if args.config:
+        config = validate_config(os.path.expanduser(args.config))
+    else:
+        config = generate_config()
+
+    # Define marker file to indicate that cloning, sync, and OS dependency installation have been completed.
+    marker_file = os.path.join(chromium_src_dir, ".jumpstart_installed")
+    if not os.path.exists(chromium_src_dir) or not os.path.exists(marker_file):
+        setup_depot_tools(chromium_src_dir)
+        run_git_config()
+        fetch_chromium_source(chromium_src_dir, depot_fetch=args.depot_fetch)
+        install_os_dependencies(chromium_src_dir)
+        # Create marker file.
+        with open(marker_file, "w") as f:
+            f.write("installed")
+    else:
+        log_info("Chromium environment already set up. Skipping clone/sync and OS dependencies installation.")
+
+    log_info(f"Initializing Chromium Jumpstart project: {project_name}...")
+
+    project_path = create_project_directory(project_name, jumpstart_repo_base)
+    if project_path:
+        write_config_file(project_path, project_name, chromium_src_dir, config)
+        setup_build_directory(project_path, chromium_src_dir)
+
+        # Load the config from disk (if needed) and apply build flags.
+        config = load_config(project_path)
+        apply_build_flags(config, chromium_src_dir)
+
+        log_success(f"Project '{project_name}' is ready!")
+        log_info(f"Navigate to the project: cd {project_path}")
+        log_info(f"Modify your config: {os.path.join(project_path, 'jumpstart.config.json')}")
+        log_info(f"Start building: cd {chromium_src_dir} && ninja -C out/{project_name}")
 
 if __name__ == "__main__":
     main()
