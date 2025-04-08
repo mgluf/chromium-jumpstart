@@ -1,0 +1,13 @@
+{
+  "ctx": [
+    "**/*.js",
+    "**/*.ts",
+    "**/*.json",
+    "**/*.md"
+  ],
+  "default_stubs": [
+    "summary.md",
+    "prompt.md"
+  ],
+  "strip_repomix_frontmatter": true
+}
