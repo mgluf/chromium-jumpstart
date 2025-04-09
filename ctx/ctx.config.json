@@ -1,9 +1,11 @@
 {
   "ctx": [
-    "**/*.js",
-    "**/*.ts",
+    "**/*.py",
+    "**/*.sh",
     "**/*.json",
-    "**/*.md"
+    "**/*.md",
+    "**/*.txt",
+    "!**/ctx"
   ],
   "default_stubs": [
     "summary.md",

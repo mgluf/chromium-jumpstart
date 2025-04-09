@@ -1,3 +1,200 @@
+<global_frontmatter>
+
+<global_context>
+This file was generated using [Repomix](https://repomix.com) to flatten selected source files into a format that is easy for language models to consume. The generation process was augmented using `usr-ctx`, a file-based CLI tool that injects structured frontmatter, context-specific notes, and custom metadata into the final output. Unlike a full-repository rollup, this context may represent a targeted subset of files—called a &quot;sub-context&quot;—to focus the model’s attention on a specific area of the codebase or problem domain.
+</global_context>
+
+<repo_context>
+This repo represents `chromium-jumpstart`. A custom open-source chromium toolkit intended to “jump-start” the notoriously bloated and potentially confusing dev stack that is chromium source. 
+
+- Streamline installing dependencies and cloning chromium src (macOs only for now)
+- Spin up a new chromium fork with a single command via a prompt based experience.
+- Create multiple projects that share a single chromium source to conserve drive space.
+- Define feature exclusion, build settings and more via a config.json
+- Out-of-the box Browser ↔ front-end API pipeline (generic built for extension)
+</repo_context>
+
+</global_frontmatter>
+
+
+<frontmatter>
+
+<prompt>
+1. Validate that the script is attempting to properly handle the completion state of the perform_git_clone process. If not, what can we do to resolve this?
+2. Now that I have a chromium_src cloned when I run init again, can we validate this will be detected if I select the same install location? (note: I backed it up)
+</prompt>
+
+<summary>
+Currently the init script works up until git clone is complete, then it stalls.
+
+This the last log coming directly from peform_git_clone
+
+`Updating files: 100% (470412/470412), done.`
+
+I then exited the process manually after waiting about 15 minutes and got this:
+
+```bash
+Updating files: 100% (470412/470412), done.[ERROR] Fatal error during fetch.
+[PROMPT] Delete /Users/mgluf/chromium_src and re-init? (Y/n) n
+[INFO] User opted to inspect the partial clone. Aborting fetch.
+```
+
+I don&apos;t know python very well, but i&apos;m not sure if we&apos;re handling the completion state at all or correctly.
+</summary>
+
+</frontmatter>
+
+
+<directory_structure>
+jumpstart/
+  __init__.py
+  api.py
+  chromium.py
+  config.py
+  init.py
+scripts/
+  modify_chromium.sh
+jumpstart.py
+setup.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="jumpstart/__init__.py">
+## marks jumpstart as a pacakge
+</file>
+
+<file path="jumpstart/api.py">
+# Handles Browser ↔ Frontend API logic
+</file>
+
+<file path="jumpstart/chromium.py">
+# Manages Chromium setup, fetching, and building
+</file>
+
+<file path="scripts/modify_chromium.sh">
+# script for stripping features based on jumpstart.config.json
+</file>
+
+<file path="jumpstart.py">
+## cli entry point
+import argparse
+from jumpstart.init import main as init_project
+
+def main():
+    parser = argparse.ArgumentParser(description="Chromium Jump Starter CLI")
+    parser.add_argument("command", choices=["init"], help="Command to run")
+    args = parser.parse_args()
+
+    if args.command == "init":
+        init_project()
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="setup.py">
+# python package setup
+from setuptools import setup, find_packages
+
+setup(
+    name="chromium-jumpstart",
+    version="0.1",
+    packages=find_packages(),
+    entry_points={
+        "console_scripts": [
+            "jumpstart=jumpstart.init:main",
+        ],
+    },
+    install_requires=[],
+)
+</file>
+
+<file path="jumpstart/config.py">
+import json
+import os
+
+CONFIG_FILENAME = "jumpstart.config.json"
+
+DEFAULT_CONFIG = {
+    "metadata": {
+        "name": "",
+        "version": "0.1",
+        "description": "Custom Chromium build configuration",
+        "base_chromium_version": "latest",
+        "init": {
+            "project_dir": "",
+            "chromium_src": "",
+            "depot_tools": False,
+        }
+    },
+    "paths": {
+        "chromium_src": ""
+    },
+    "features": {
+        "security": {
+            "sandboxing": True,
+            "site_isolation": True
+        },
+        "performance": {
+            "gpu_acceleration": True
+        },
+        "privacy": {
+            "tracking_protection": True,
+            "ad_blocking": True
+        }
+    },
+    "build": {
+        "optimization_level": "O2",
+        "disable_google_update_check": True,
+        "is_debug": False,
+        "use_jumbo_build": True,
+        "thin_lto": True,
+        "custom_build_flags": None
+    }
+}
+
+def generate_config():
+    """Return a copy of the default configuration options."""
+    return DEFAULT_CONFIG.copy()
+
+def validate_config(config_path):
+    """
+    Validate and load a configuration file.
+    If validation fails, return the default configuration.
+    Basic check: ensure 'metadata' and 'paths' keys are present.
+    """
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        if "metadata" not in config or "paths" not in config:
+            print("[WARN] Config file missing required keys. Using default config.")
+            return generate_config()
+        # TODO: Extend validation as needed.
+        return config
+    except Exception as e:
+        print(f"[WARN] Error reading config file: {e}. Using default config.")
+        return generate_config()
+
+def load_config(project_path):
+    """Load jumpstart.config.json from the given project directory."""
+    config_path = os.path.join(project_path, CONFIG_FILENAME)
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            return json.load(f)
+    print("⚠️ No config file found. Using defaults.")
+    return {}
+
+def write_config(project_path, config):
+    """Write jumpstart.config.json to the given project directory."""
+    config_path = os.path.join(project_path, CONFIG_FILENAME)
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=4)
+    print(f"✅ Config file written: {config_path}")
+</file>
+
+<file path="jumpstart/init.py">
 import os
 import json
 import subprocess
@@ -276,3 +473,34 @@ def main():
 
 if __name__ == "__main__":
     main()
+</file>
+
+</files>
+
+
+<notes>
+
+<prompt>
+1. Validate that the script is attempting to properly handle the completion state of the perform_git_clone process. If not, what can we do to resolve this?
+2. Now that I have a chromium_src cloned when I run init again, can we validate this will be detected if I select the same install location? (note: I backed it up)
+</prompt>
+
+<summary>
+Currently the init script works up until git clone is complete, then it stalls.
+
+This the last log coming directly from peform_git_clone
+
+`Updating files: 100% (470412/470412), done.`
+
+I then exited the process manually after waiting about 15 minutes and got this:
+
+```bash
+Updating files: 100% (470412/470412), done.[ERROR] Fatal error during fetch.
+[PROMPT] Delete /Users/mgluf/chromium_src and re-init? (Y/n) n
+[INFO] User opted to inspect the partial clone. Aborting fetch.
+```
+
+I don&apos;t know python very well, but i&apos;m not sure if we&apos;re handling the completion state at all or correctly.
+</summary>
+
+</notes>
