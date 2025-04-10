@@ -24,7 +24,7 @@ def log_warn(message):
 def log_success(message):
     print(f"\033[32m[◯]\033[0m {message}")
 
-# ----------------- Command Runner -----------------
+# ----------------- Command Runner & Streamer -----------------
 def run_command(command, cwd=None, check=True):
     result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0 and check:
@@ -32,9 +32,43 @@ def run_command(command, cwd=None, check=True):
         exit(1)
     return result.stdout.strip()
 
+def stream_command(command, cwd=None):
+    """Run a command and stream its output cleanly in-place with log formatting."""
+    prefix = "\033[38;5;208m[◯]\033[0m"  # Bright orange [◯]
+
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+        universal_newlines=True
+    )
+
+    try:
+        for line in process.stdout:
+            line = line.strip().replace('\n', '')
+            short_line = (line[:100] + '...') if len(line) > 100 else line
+            sys.stdout.write(f"\r{prefix} {short_line:<100}")
+            sys.stdout.flush()
+        sys.stdout.write("\n")  # Newline after clean output
+    except Exception as e:
+        log_error(f"Error streaming command: {e}")
+        process.kill()
+        raise
+
+    exit_code = process.wait()
+    if exit_code != 0:
+        log_error(f"Command failed with exit code {exit_code}: {command}")
+        exit(1)
+
+
+
+
 # ----------------- Prompt Functions -----------------
 def prompt_input(message):
-    return input(f"\033[35m[PROMPT]\033[0m {message} ").strip()
+    return input(f"\033[35m[◯]\033[0m {message} ").strip()
 
 def prompt_chromium_src_path():
     path = prompt_input("Enter Chromium source install path \033[90m(default: ~/chromium_src):\033[0m")
@@ -55,37 +89,16 @@ def prompt_project_name():
 # ----------------- Git Clone and Sync -----------------
 def perform_git_clone(chromium_src_dir):
     log_info("Cloning Chromium source via git clone...")
-    cmd = shlex.split(f"git clone --progress {CHROMIUM_GIT_REPO} {chromium_src_dir}")
-
-    def read(fd):
-        last_output_time = time.time()
-        try:
-            while True:
-                data = os.read(fd, 1024)
-                if not data:
-                    break
-                output = data.decode(errors="ignore")
-                # Show first 100 characters of the output line
-                sys.stdout.write("\r" + output.strip().replace('\n', ' ')[:100])
-                sys.stdout.flush()
-                last_output_time = time.time()
-
-                if "fatal" in output.lower():
-                    log_error("Fatal error detected during clone.")
-                    raise RuntimeError("fatal error")
-
-                if time.time() - last_output_time > STALL_TIMEOUT:
-                    log_warn("Git clone appears stalled for over 2 minutes.")
-                    raise TimeoutError("stall detected")
-        except Exception:
-            return b""
-        return b""
-
+    cmd = f"caffeinate git clone --progress {CHROMIUM_GIT_REPO} {chromium_src_dir}"
     try:
-        return pty.spawn(cmd, read)
+        stream_command(cmd)
+        log_success("Git clone completed successfully.")
+        return True
     except Exception as e:
         log_error(f"Git clone failed: {str(e)}")
         return False
+
+
 
 def perform_depot_fetch(chromium_src_dir):
     log_info("Fetching Chromium source using depot_fetch method...")
@@ -123,9 +136,12 @@ def fetch_chromium_source(chromium_src_dir, depot_fetch=False):
         else:
             log_error("Aborting.")
             exit(1)
-
+            
+    log_info("Running gclient config...")
+    run_command(f"gclient config {CHROMIUM_GIT_REPO}", cwd=chromium_src_dir)
     log_info("Running gclient sync...")
-    run_command("gclient sync --jobs 16 --nohooks", cwd=chromium_src_dir)
+    stream_command("gclient sync --jobs 16 --nohooks", cwd=chromium_src_dir)
+
 
 # ----------------- OS Dependencies -----------------
 def install_os_dependencies(chromium_src_dir):
@@ -244,19 +260,41 @@ def main():
         config = validate_config(os.path.expanduser(args.config))
     else:
         config = generate_config()
-
-    # Define marker file to indicate that cloning, sync, and OS dependency installation have been completed.
+    
+    # Define marker file to indicate setup is complete
     marker_file = os.path.join(chromium_src_dir, ".jumpstart_installed")
-    if not os.path.exists(chromium_src_dir) or not os.path.exists(marker_file):
+    gclient_file = os.path.join(chromium_src_dir, ".gclient")
+
+    # Begin setup only if .jumpstart_installed doesn't exist
+    if not os.path.exists(marker_file):
         setup_depot_tools(chromium_src_dir)
         run_git_config()
-        fetch_chromium_source(chromium_src_dir, depot_fetch=args.depot_fetch)
+
+        # If Chromium hasn't been cloned, fetch it
+        if not os.path.exists(chromium_src_dir) or not os.path.exists(os.path.join(chromium_src_dir, ".git")):
+            fetch_chromium_source(chromium_src_dir, depot_fetch=args.depot_fetch)
+        else:
+            log_info(f"Chromium source already exists at: {chromium_src_dir} — skipping clone.")
+
+        # Ensure gclient config has been applied
+        if not os.path.exists(gclient_file):
+            log_info("Running gclient config...")
+            run_command(f"gclient config {CHROMIUM_GIT_REPO}", cwd=chromium_src_dir)
+
+        # Run gclient sync
+        log_info("Running gclient sync...")
+        run_command("gclient sync --jobs 16 --nohooks", cwd=chromium_src_dir)
+
+        # Install OS dependencies
         install_os_dependencies(chromium_src_dir)
-        # Create marker file.
+
+        # Create marker file
         with open(marker_file, "w") as f:
             f.write("installed")
+
     else:
         log_info("Chromium environment already set up. Skipping clone/sync and OS dependencies installation.")
+
 
     log_info(f"Initializing Chromium Jumpstart project: {project_name}...")
 
