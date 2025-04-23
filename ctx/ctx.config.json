@@ -1,5 +1,5 @@
 {
-  "ctx": [
+  "context": [
     "**/*.py",
     "**/*.sh",
     "**/*.json",
@@ -7,9 +7,8 @@
     "**/*.txt",
     "!**/ctx"
   ],
-  "default_stubs": [
+  "frontmatter": [
     "summary.md",
     "prompt.md"
-  ],
-  "strip_repomix_frontmatter": true
+  ]
 }

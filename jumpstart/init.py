@@ -58,10 +58,7 @@ def stream_command(command, cwd=None):
         process.kill()
         raise
 
-    exit_code = process.wait()
-    if exit_code != 0:
-        log_error(f"Command failed with exit code {exit_code}: {command}")
-        exit(1)
+    return process.wait()  # <— don't exit here, just return the code
 
 
 
@@ -90,13 +87,29 @@ def prompt_project_name():
 def perform_git_clone(chromium_src_dir):
     log_info("Cloning Chromium source via git clone...")
     cmd = f"caffeinate git clone --progress {CHROMIUM_GIT_REPO} {chromium_src_dir}"
+    exit_code = stream_command(cmd)
+
+    if exit_code != 0:
+        log_warn(f"Git clone exited with code {exit_code}. Verifying clone integrity...")
+
+    # Verify if the clone appears usable
+    git_dir = os.path.join(chromium_src_dir, ".git")
     try:
-        stream_command(cmd)
-        log_success("Git clone completed successfully.")
-        return True
+        if os.path.exists(git_dir):
+            # Run a simple log to confirm it's a usable Git repo
+            output = run_command(f"git -C {chromium_src_dir} log -n 1", check=False)
+            if output:
+                log_success("Clone appears to be intact despite non-zero exit code.")
+                return True
+            else:
+                log_error("No commits found in cloned repo.")
+        else:
+            log_error(".git directory not found. Clone likely failed.")
     except Exception as e:
-        log_error(f"Git clone failed: {str(e)}")
-        return False
+        log_error(f"Clone integrity check failed: {e}")
+
+    return False
+
 
 
 
@@ -140,7 +153,8 @@ def fetch_chromium_source(chromium_src_dir, depot_fetch=False):
     log_info("Running gclient config...")
     run_command(f"gclient config {CHROMIUM_GIT_REPO}", cwd=chromium_src_dir)
     log_info("Running gclient sync...")
-    stream_command("gclient sync --jobs 16 --nohooks", cwd=chromium_src_dir)
+    stream_command("gclient sync --jobs 4 --nohooks", cwd=chromium_src_dir)
+
 
 
 # ----------------- OS Dependencies -----------------
