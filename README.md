@@ -1,4 +1,5 @@
 # Chromium Jumpstart
+<img width="300" height="300" alt="image" src="https://github.com/user-attachments/assets/26d54b60-344a-4e31-94d8-31794df4c245" />
 
 > ⚠️ **Status**: Paused / Incomplete
 > This project was an experimental attempt to streamline the process of forking and customizing Chromium. It didn’t fully materialize but might still be a useful reference for others.
